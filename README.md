@@ -1,87 +1,68 @@
-# Galaxy Distribution Analysis using CUDA
+# Galaxy Angular Correlation (CUDA)
 
-## Overview
-This project involves the design, implementation, and execution of a CUDA-based program to analyze the 2-point angular correlation function of galaxies. The objective is to determine if the observed distribution of galaxies statistically differs from a random distribution by comparing histograms of galaxy pair angles.
+CUDA implementations for the 2‑point angular correlation function comparing real and random galaxy catalogs.
 
-## Files and Structure
-
-The project includes the following CUDA source files:
-
-1. **galaxy_shared_mem.cu**: Implements the galaxy distribution analysis using shared memory for optimization.
-2. **galaxy_no_cache.cu**: Implements the analysis without utilizing cache for memory optimization.
-3. **galaxy_manual.cu**: A manual approach to analyzing the galaxy distribution without specific memory optimization techniques.
-4. **template.cu**: A template file setting up the basic environment and defining common functions for the analysis.
+## Repository Layout
+- `src/galaxy_shared_mem.cu` – shared-memory kernel (90° range, 1024 threads/block).
+- `src/galaxy_no_cache.cu` – global-memory baseline (180° range).
+- `src/galaxy_manual.cu` – manual/experimental variant.
+- `src/template.cu` – scaffold for new kernels.
+- `data/real.dat`, `data/synthetic.dat` – sample catalogs (first line count, following lines `ra dec` in arcminutes).
+- `bin/` – build outputs.
+- `outputs/` – place run artifacts.
+- `docs/` – add figures/notes here.
 
 ## Requirements
+- CUDA toolkit (`nvcc` on PATH).
+- NVIDIA GPU with compute capability matching your `ARCH` flag.
+- Linux/macOS; adjust flags if building on other platforms.
 
-- NVIDIA CUDA toolkit
-- A GPU-enabled machine
-- Access to the real and synthetic galaxy data (available on Moodle)
-
-
-## Compilation and Execution
-To compile and run the CUDA programs, use the following commands:
-```bash
-nvcc galaxy_shared_mem.cu -o galaxy_shared_mem
-./galaxy_shared_mem real.dat synthetic.dat output.dat
-
-nvcc galaxy_no_cache.cu -o galaxy_no_cache
-./galaxy_no_cache real.dat synthetic.dat output.dat
-
-nvcc galaxy_manual.cu -o galaxy_manual
-./galaxy_manual real.dat synthetic.dat output.dat
+## Build
 ```
-## Project Description
+make           # builds all targets into bin/
+# optional overrides:
+# make NVCCFLAGS="-O3 -lineinfo" ARCH=sm_86
+```
 
-### Input Data
+Targets: `galaxy_shared_mem`, `galaxy_no_cache`, `galaxy_manual`.
 
-The input consists of two lists of 100,000 galaxy locations: real measured galaxies and synthetic evenly distributed random galaxies. Each list contains the galactic coordinates in the following order:
+## Run
+```
+./bin/galaxy_shared_mem data/real.dat data/synthetic.dat outputs/shared.out
+./bin/galaxy_no_cache   data/real.dat data/synthetic.dat outputs/no_cache.out
+./bin/galaxy_manual     data/real.dat data/synthetic.dat outputs/manual.out
+```
 
-- **Right Ascension (a)**: in arc minutes
-- **Declination (d)**: in arc minutes
+Input is assumed in arcminutes. Inside the code, values are converted to radians:
+```
+ra_rad   = ra_arcmin   * (π / 10800)
+dec_rad  = dec_arcmin  * (π / 10800)
+```
 
-These coordinates should be converted to radians by multiplying with $\frac{\pi}{10800} $.
+## Science Quick Reference
+- Angle between two positions:
+  ```
+  θ = arccos( sin(d1)·sin(d2) + cos(d1)·cos(d2)·cos(a1 - a2) )
+  ```
+- Correlation estimator per bin `i`:
+  ```
+  w_i(θ) = (DD_i - 2·DR_i + RR_i) / RR_i
+  ```
+  Values near 0 ⇒ random-like; significant deviation ⇒ clustered.
 
-### Objective
+## Implementation Notes
+- `galaxy_shared_mem.cu`: loads tiles of coordinates into shared memory and accumulates per-block histograms before atomically combining into global bins.
+- `galaxy_no_cache.cu`: straightforward global-memory access using unified memory for histograms.
+- `galaxy_manual.cu`: experimental variant for manual tuning.
+- Bin width is 0.25° (`binsperdegree = 4`). The shared-memory version currently caps at 90°; adjust `totaldegrees` if you need the full 180° range.
 
-The main task is to compute three histograms representing the 2-point angular correlation function:
+## Profiling & Best Practices
+- Use `nvprof`, `nsys profile`, or `ncu` to measure occupancy, shared-memory pressure, and atomic throughput.
+- Tune `threadsperblock` to your GPU; ensure `ARCH` in the Makefile matches the device (e.g., `sm_86` for A100/GA100).
+- Keep input files in pinned memory if you experiment with host-side preprocessing.
+- If you expand to >100k galaxies, consider hierarchical binning or pair subsampling to keep histogram contention manageable.
 
-- **DD**: Histogram of angles between pairs of real galaxies.
-- **DR**: Histogram of angles between pairs of real and random galaxies.
-- **RR**: Histogram of angles between pairs of random galaxies.
-
-These histograms cover angles from 0 to 180 degrees with a bin width of 0.25 degrees.
-
-### Calculation of Angles
-
-To calculate the angle $( \theta_{12} )$ between two points on a sphere, use the formula:
-
-$$\theta_{12} = \arccos(\sin(d1)\sin(d2) + \cos(d1)\cos(d2)\cos(a1 - a2)) $$
-
-Where:
-- $( a )$ is the right ascension converted to radians
-- $( d )$ is the declination converted to radians
-
-### Statistical Measure
-
-The scientific measure to determine differences between the distributions is:
-
-$$ w_i(\theta) = \frac{DD_i - 2DR_i + RR_i}{RR_i} $$
-
-Where $DDi, DRi, RRi$ are the values in histogram bin $i$.
-
-If $w_i$ values are close to zero (in the range [-0.5, 0.5]), the distribution of real galaxies is approximately random. If $w_i$ values are significantly different from zero, the distribution is non-random.
-
-## Implementation Details
-
-### Threads and Thread Blocks
-
-- Design threads and thread blocks to efficiently compute pairwise angles.
-- Experiment with thread block sizes and workload distribution.
-- Synchronize threads as needed and consider atomic operations for histogram updates.
-
-### Output Data
-
-- Compute and store the histograms DD, DR, and RR.
-- Plot the histograms to visualize the differences between distributions.
-- Compute and analyze the $w_i(\theta)$ values.
+## Contributing
+- Add new kernels under `src/` and hook them into the `Makefile` pattern rule.
+- Prefer deterministic output (avoid non-deterministic atomics when comparing variants).
+- Store plots/results in `outputs/` and long-form notes in `docs/`.
